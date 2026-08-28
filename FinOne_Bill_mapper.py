@@ -8,7 +8,7 @@ import streamlit as st
 st.set_page_config(
     page_title="FinOne Data Mapper Pro", page_icon="📊", layout="wide"
 )
-st.title("📊 Chuyển Đổi Dữ Liệu Khách Hàng - FinOne Bill (Bản Chuẩn Tối Ưu)")
+st.title("📊 Chuyển Đổi Dữ Liệu Khách Hàng - FinOne Bill")
 
 # ==============================================================================
 # 1. BỘ TỪ KHÓA TỰ ĐỘNG DÒ TÌM
