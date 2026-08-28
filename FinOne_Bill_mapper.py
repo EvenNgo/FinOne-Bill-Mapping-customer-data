@@ -68,12 +68,20 @@ def auto_detect_header_row_smart(raw_df):
     return best_row
 
 def clean_phone(phone_val):
-    if pd.isna(phone_val) or str(phone_val).strip() == "" or str(phone_val).strip() == "0":
-        return ""
-    digits = re.sub(r"\D", "", str(phone_val).split(".")[0])
-    if digits.startswith("84") and len(digits) == 11: digits = "0" + digits[2:]
-    elif len(digits) == 9 and not digits.startswith("0"): digits = "0" + digits
-    return digits if len(digits) == 10 and digits.startswith("0") else ""
+    if pd.isna(phone_val): return ""
+    # Chặt bỏ đuôi .0 nếu Excel tự nhận thành số thập phân (VD: 987654321.0)
+    val_str = str(phone_val).strip().split(".")[0]
+    if val_str.lower() in ["0", "none", "nan", "null", ""]: return ""
+    
+    digits = re.sub(r"\D", "", val_str)
+    if not digits: return ""
+    
+    if digits.startswith("84") and len(digits) == 11:
+        digits = "0" + digits[2:]
+    elif len(digits) == 9 and not digits.startswith("0"):
+        digits = "0" + digits
+        
+    return digits
 
 def safe_str(val, default=""):
     if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
@@ -273,7 +281,7 @@ if uploaded_file:
     st.markdown("---")
     st.write("🔗 **Ghép các cột dữ liệu vào mẫu FinOne Bill:**")
 
-    val_coso = st.text_input("🏢 Tên Cơ sở (Nhập tay, hệ thống sẽ áp dụng cho tất cả khách hàng):", value="", placeholder="Ví dụ: Trường Mầm non A...")
+    val_coso = st.text_input("🏢 Tên Cơ sở (Nhập tay, hệ thống sẽ áp dụng cho tất cả khách hàng):", value="", placeholder="Ví dụ: Tòa nhà BMG...")
 
     col_map1, col_map2 = st.columns(2)
     with col_map1:
@@ -329,15 +337,6 @@ if uploaded_file:
     if is_missing:
         st.error(f"🚨 KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN trên sheet '{selected_preview_sheet}'! Vui lòng kiểm tra lại cấu trúc cột của sheet này.")
 
-    if "Một cột trong bảng" in group_strategy and not is_missing:
-        _cols_check = load_sheet(
-            file_bytes, sheet_name=selected_preview_sheet,
-            header=(current_header_idx if selected_preview_sheet == preview_sheet_ref
-                    else auto_detect_header_row_smart(load_sheet(file_bytes, sheet_name=selected_preview_sheet, header=None, nrows=15))),
-        ).columns.tolist()
-        if not resolve_column_for_sheet(_cols_check, group_col, "group"):
-            st.warning(f"⚠️ Sheet '{selected_preview_sheet}' không tìm thấy cột Nhóm '{group_col}' — các dòng hợp lệ sẽ dùng giá trị mặc định '{fixed_group_val or '(rỗng)'}' cho Nhóm KH.")
-
     col_pv1, col_pv2 = st.columns(2)
     col_pv1.metric("✅ HỢP LỆ (Thành công)", f"{len(v_rows)} dòng")
     col_pv2.metric("❌ TỪ CHỐI (Bị loại)", f"{len(r_rows)} dòng")
@@ -351,7 +350,7 @@ if uploaded_file:
         else: st.success("Không có dòng bị loại!")
 
     # ==============================================================================
-    # XUẤT FILE HOÀN CHỈNH & ĐỐI SOÁT QUÂN SỐ
+    # XUẤT FILE HOÀN CHỈNH
     # ==============================================================================
     st.markdown("---")
     st.subheader("BƯỚC 3: XÁC NHẬN VÀ XUẤT TOÀN BỘ FILE")
@@ -367,24 +366,13 @@ if uploaded_file:
         ws = wb["Bảng nhập liệu khách hàng"] if "Bảng nhập liệu khách hàng" in wb.sheetnames else wb.active
 
         total_valid, total_rejected = 0, 0
-        summary_stats, all_rejected_rows, sheets_missing_cols, sheets_missing_group_col, bulk_write_data = [], [], [], [], []
+        summary_stats, all_rejected_rows, bulk_write_data = [], [], []
 
         for s_name in selected_sheets:
             v_rows, r_rows, hdr_text, col_text, is_missing = process_sheet_data(s_name, file_bytes, config)
-
-            if is_missing:
-                sheets_missing_cols.append(s_name)
-            elif "Một cột trong bảng" in group_strategy:
-                _raw = load_sheet(file_bytes, sheet_name=s_name, header=None, nrows=15)
-                _h = current_header_idx if s_name == preview_sheet_ref else auto_detect_header_row_smart(_raw)
-                _cols = load_sheet(file_bytes, sheet_name=s_name, header=_h).columns.tolist()
-                if not resolve_column_for_sheet(_cols, group_col, "group"):
-                    sheets_missing_group_col.append(s_name)
-
             for row_dict in v_rows:
                 bulk_write_data.append(row_dict)
                 total_valid += 1
-
             total_rejected += len(r_rows)
             all_rejected_rows.extend(r_rows)
             summary_stats.append({
@@ -392,7 +380,7 @@ if uploaded_file:
                 "Số dòng Hợp lệ": len(v_rows), "Số dòng Bị loại": len(r_rows),
             })
 
-        # Ghi trực tiếp vào đích danh từng cột trong File mẫu (Tránh lỗi lệch cột)
+        # Ghi đích danh vào từng cột của FinOne (Chống lệnh lệch cột 100%)
         col_mapping = {
             "Cơ sở (*)": 2,          # Cột B
             "Nhóm KH (*)": 3,        # Cột C
@@ -409,9 +397,21 @@ if uploaded_file:
         for row_data in bulk_write_data:
             for key, col_idx in col_mapping.items():
                 cell_val = row_data.get(key, "")
-                # Ép chặt rỗng nếu không có dữ liệu để Excel không tự hiểu nhầm là số 0
-                safe_val = "" if cell_val in [None, "None", "nan", "0", "0.0"] or (isinstance(cell_val, float) and pd.isna(cell_val)) else cell_val
-                ws.cell(row=current_row, column=col_idx, value=safe_val)
+                
+                # Ép chặt thành rỗng nếu dữ liệu là 0, NaN, None (Tránh hiển thị số 0 vô duyên)
+                safe_val = "" if str(cell_val).strip().lower() in ["", "none", "nan", "null", "0", "0.0"] or (isinstance(cell_val, float) and pd.isna(cell_val)) else str(cell_val).strip()
+                
+                cell = ws.cell(row=current_row, column=col_idx)
+                
+                # CHỐT CHẶN BẢO VỆ: Ép định dạng Text trong Excel cho số Điện Thoại và ID 
+                # để không bao giờ bị rụng mất số 0 ở đầu (VD: 098... không bị biến thành 98...)
+                if key in ["Điện thoại (*)", "Mã định danh"]:
+                    cell.data_type = 's'  # Ép thư viện Python ghi dưới dạng String
+                    cell.number_format = '@'  # Ép Excel hiển thị dưới định dạng Text
+                    cell.value = safe_val
+                else:
+                    cell.value = safe_val
+                    
             current_row += 1
 
         output_buffer = io.BytesIO()
@@ -419,15 +419,8 @@ if uploaded_file:
         output_buffer.seek(0)
 
         st.success(f"🎉 Đã gộp thành công **{total_valid} khách hàng** từ **{len(selected_sheets)} Sheet**!")
-
-        if sheets_missing_cols:
-            st.error("🚨 **CẢNH BÁO: Có Sheet KHÔNG map được cột Tên khách hàng — toàn bộ dữ liệu đã bị loại:**\n\n" + "\n".join(f"- {s}" for s in sheets_missing_cols))
-
-        if sheets_missing_group_col:
-            st.warning(f"⚠️ **Có Sheet không tìm thấy cột Nhóm KH đã chọn — các dòng hợp lệ dùng mặc định '{fixed_group_val or '(rỗng)'}':**\n\n" + "\n".join(f"- {s}" for s in sheets_missing_group_col))
-
-        total_scanned = total_valid + total_rejected
-        st.info(f"✅ **Đối soát quân số:** Tổng dòng quét = **{total_scanned}** | Hợp lệ = **{total_valid}** | Bị loại = **{total_rejected}**")
+        
+        st.info(f"✅ **Đối soát quân số:** Tổng dòng quét = **{total_valid + total_rejected}** | Hợp lệ = **{total_valid}** | Bị loại = **{total_rejected}**")
 
         tab_final1, tab_final2 = st.tabs(["📥 Tải File Hoàn Chỉnh (FinOne)", "❌ Báo Cáo Tổng Hợp Dòng Bị Loại"])
 
