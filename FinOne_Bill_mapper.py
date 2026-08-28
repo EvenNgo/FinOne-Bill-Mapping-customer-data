@@ -68,7 +68,8 @@ def auto_detect_header_row_smart(raw_df):
     return best_row
 
 def clean_phone(phone_val):
-    if pd.isna(phone_val): return ""
+    if pd.isna(phone_val) or str(phone_val).strip() == "" or str(phone_val).strip() == "0":
+        return ""
     digits = re.sub(r"\D", "", str(phone_val).split(".")[0])
     if digits.startswith("84") and len(digits) == 11: digits = "0" + digits[2:]
     elif len(digits) == 9 and not digits.startswith("0"): digits = "0" + digits
@@ -78,6 +79,8 @@ def safe_str(val, default=""):
     if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
         return default
     s = str(val).strip()
+    if s.lower() in ("nan", "none", "null", "0", "0.0") and default == "":
+        return ""
     return default if s.lower() in ("nan", "none", "null") else s
 
 # ==============================================================================
@@ -139,7 +142,6 @@ def process_sheet_data(s_name, file_bytes, config):
         name_str = str(name_val).strip()
         lower_name = name_str.lower()
 
-        # Xác định giá trị theo cấu hình Nhập cố định vs Lấy từ cột
         v_phone = config["fix_phone"] if config["map_phone"] == ">> Nhập giá trị cố định <<" else r.get(s_phone_col, "")
         v_id = config["fix_id"] if config["map_id"] == ">> Nhập giá trị cố định <<" else r.get(s_id_col, "")
         v_email = config["fix_email"] if config["map_email"] == ">> Nhập giá trị cố định <<" else r.get(s_email_col, "")
@@ -198,7 +200,7 @@ def process_sheet_data(s_name, file_bytes, config):
                 "Mã định danh": safe_str(v_id),
                 "Điện thoại (*)": clean_phone(v_phone),
                 "Email": safe_str(v_email),
-                "Loại KH": "", # Loại KH luôn bỏ trống theo đúng yêu cầu
+                "Loại KH": "", 
                 "Địa chỉ/Ghi chú": safe_str(v_addr),
                 "Tên doanh nghiệp": safe_str(v_comp),
             })
@@ -238,7 +240,6 @@ if uploaded_file:
     df_sample = load_sheet(file_bytes, sheet_name=preview_sheet_ref, header=current_header_idx)
     valid_cols = [str(c).strip() for c in df_sample.columns if not str(c).startswith("Unnamed:") and pd.notna(c)]
     
-    # Bổ sung option: Cho phép điền tay cố định nếu không khớp cột
     dropdown_opts = ["-- Bỏ trống --", ">> Nhập giá trị cố định <<"] + valid_cols
 
     def get_auto_index(category_key):
@@ -272,7 +273,6 @@ if uploaded_file:
     st.markdown("---")
     st.write("🔗 **Ghép các cột dữ liệu vào mẫu FinOne Bill:**")
 
-    # Nhập tay cơ sở cho tất cả File
     val_coso = st.text_input("🏢 Tên Cơ sở (Nhập tay, hệ thống sẽ áp dụng cho tất cả khách hàng):", value="", placeholder="Ví dụ: Trường Mầm non A...")
 
     col_map1, col_map2 = st.columns(2)
@@ -382,11 +382,7 @@ if uploaded_file:
                     sheets_missing_group_col.append(s_name)
 
             for row_dict in v_rows:
-                bulk_write_data.append([
-                    row_dict["Cơ sở (*)"], row_dict["Nhóm KH (*)"], row_dict["Tên KH (*)"], row_dict["Mã định danh"],
-                    row_dict["Điện thoại (*)"], row_dict["Email"], row_dict["Loại KH"],
-                    row_dict["Địa chỉ/Ghi chú"], row_dict["Tên doanh nghiệp"]
-                ])
+                bulk_write_data.append(row_dict)
                 total_valid += 1
 
             total_rejected += len(r_rows)
@@ -396,10 +392,25 @@ if uploaded_file:
                 "Số dòng Hợp lệ": len(v_rows), "Số dòng Bị loại": len(r_rows),
             })
 
+        # Ghi trực tiếp vào đích danh từng cột trong File mẫu (Tránh lỗi lệch cột)
+        col_mapping = {
+            "Cơ sở (*)": 2,          # Cột B
+            "Nhóm KH (*)": 3,        # Cột C
+            "Tên KH (*)": 4,         # Cột D
+            "Mã định danh": 5,       # Cột E
+            "Điện thoại (*)": 6,     # Cột F
+            "Email": 7,              # Cột G
+            "Loại KH": 8,            # Cột H
+            "Địa chỉ/Ghi chú": 9,    # Cột I
+            "Tên doanh nghiệp": 10   # Cột J
+        }
+
         current_row = 6
-        for row_vals in bulk_write_data:
-            for col_idx, cell_val in enumerate(row_vals, start=1): # start=1 vì giờ đã có "Cơ sở (*)" ở cột A
-                safe_val = "" if (cell_val is None or (isinstance(cell_val, float) and pd.isna(cell_val))) else cell_val
+        for row_data in bulk_write_data:
+            for key, col_idx in col_mapping.items():
+                cell_val = row_data.get(key, "")
+                # Ép chặt rỗng nếu không có dữ liệu để Excel không tự hiểu nhầm là số 0
+                safe_val = "" if cell_val in [None, "None", "nan", "0", "0.0"] or (isinstance(cell_val, float) and pd.isna(cell_val)) else cell_val
                 ws.cell(row=current_row, column=col_idx, value=safe_val)
             current_row += 1
 
