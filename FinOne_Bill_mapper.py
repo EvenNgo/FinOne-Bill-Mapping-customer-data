@@ -28,61 +28,37 @@ KEYWORDS = {
 }
 
 # ==============================================================================
-# 2. HÀM CORE & LÀM SẠCH FILE LỖI TRỰC TIẾP TRÊN RAM (CHỐNG LỖI MULTICELLRANGE)
+# 2. HÀM CORE & LÀM SẠCH FILE LỖI TRỰC TIẾP TRÊN RAM (CHỐNG CRASH OPENPYXL)
 # ==============================================================================
 def sanitize_excel_bytes(file_bytes):
-  """Tự động bóc tách và gọt bỏ các thẻ Data Validation bị hỏng (F:F, O:O, A:A)
+    """Bóc tách và gọt bỏ các thẻ Data Validation bị hỏng trực tiếp trong RAM."""
+    try:
+        in_zip = zipfile.ZipFile(io.BytesIO(file_bytes), "r")
+        out_buf = io.BytesIO()
+        out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
 
-  trực tiếp trong RAM trước khi đưa vào Pandas.
-  """
-  try:
-    in_zip = zipfile.ZipFile(io.BytesIO(file_bytes), "r")
-    out_buf = io.BytesIO()
-    out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
+        for item in in_zip.infolist():
+            data = in_zip.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet") and item.filename.endswith(".xml"):
+                data = re.sub(b"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>", b"", data, flags=re.DOTALL)
+                data = re.sub(b"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>", b"", data, flags=re.DOTALL)
+            out_zip.writestr(item, data)
 
-    for item in in_zip.infolist():
-      data = in_zip.read(item.filename)
-      if item.filename.startswith(
-          "xl/worksheets/sheet"
-      ) and item.filename.endswith(".xml"):
-        # Xóa sạch các thẻ gây lỗi MultiCellRange trong openpyxl
-        data = re.sub(
-            b"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>",
-            b"",
-            data,
-            flags=re.DOTALL,
-        )
-        data = re.sub(
-            b"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>",
-            b"",
-            data,
-            flags=re.DOTALL,
-        )
-      out_zip.writestr(item, data)
-
-    out_zip.close()
-    out_buf.seek(0)
-    return out_buf.getvalue()
-  except Exception:
-    return file_bytes
-
+        out_zip.close()
+        out_buf.seek(0)
+        return out_buf.getvalue()
+    except Exception:
+        return file_bytes
 
 @st.cache_data(show_spinner=False)
 def get_sheet_names(file_bytes):
-  safe_bytes = sanitize_excel_bytes(file_bytes)
-  return pd.ExcelFile(io.BytesIO(safe_bytes)).sheet_names
-
+    safe_bytes = sanitize_excel_bytes(file_bytes)
+    return pd.ExcelFile(io.BytesIO(safe_bytes)).sheet_names
 
 @st.cache_data(show_spinner=False)
 def load_sheet(file_bytes, sheet_name, header=None, nrows=None):
-  # Bọc dữ liệu an toàn để tránh sập openpyxl
-  safe_bytes = sanitize_excel_bytes(file_bytes)
-  return pd.read_excel(
-      io.BytesIO(safe_bytes),
-      sheet_name=sheet_name,
-      header=header,
-      nrows=nrows,
-  )
+    safe_bytes = sanitize_excel_bytes(file_bytes)
+    return pd.read_excel(io.BytesIO(safe_bytes), sheet_name=sheet_name, header=header, nrows=nrows)
 
 def find_column_by_keywords(columns, keyword_list):
     for col in columns:
@@ -144,9 +120,9 @@ def safe_str(val, default=""):
     return default if s.lower() in ("nan", "none", "null") else s
 
 # ==============================================================================
-# 3. TRÁI TIM NGHIỆP VỤ: XỬ LÝ & LỌC DỮ LIỆU DÙNG CHUNG
+# 3. TRÁI TIM NGHIỆP VỤ: XỬ LÝ & LỌC DỮ LIỆU
 # ==============================================================================
-def process_sheet_data(s_name, file_bytes, config):
+def process_sheet_data(s_name, file_bytes, config, file_base_name=""):
     if s_name == config["preview_sheet_ref"]:
         h_idx = config["current_header_idx"]
     else:
@@ -168,8 +144,8 @@ def process_sheet_data(s_name, file_bytes, config):
             for idx, r in df_sheet.iterrows():
                 excel_row_num = h_idx + idx + 2
                 rej_dict = {
-                    "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
-                    "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT HỌ / TÊN (Cấu trúc cột khác sheet mẫu)",
+                    "File Nguồn": file_base_name, "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
+                    "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT HỌ / TÊN",
                 }
                 for k, v in r.items():
                     if not str(k).startswith("Unnamed:") and pd.notna(k):
@@ -184,8 +160,8 @@ def process_sheet_data(s_name, file_bytes, config):
             for idx, r in df_sheet.iterrows():
                 excel_row_num = h_idx + idx + 2
                 rej_dict = {
-                    "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
-                    "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN (Cấu trúc cột khác sheet mẫu)",
+                    "File Nguồn": file_base_name, "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
+                    "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN",
                 }
                 for k, v in r.items():
                     if not str(k).startswith("Unnamed:") and pd.notna(k):
@@ -263,16 +239,21 @@ def process_sheet_data(s_name, file_bytes, config):
 
         if not is_val:
             if not pd.isna(r.values).all():
-                rej_dict = {"Tên Sheet": s_name, "Dòng Excel số": excel_row_num, "Lý do loại bỏ": reason}
+                rej_dict = {"File Nguồn": file_base_name, "Tên Sheet": s_name, "Dòng Excel số": excel_row_num, "Lý do loại bỏ": reason}
                 for k, v in r.items():
                     if not str(k).startswith("Unnamed:") and pd.notna(k):
                         rej_dict[str(k)] = "" if pd.isna(v) else str(v)
                 rejected_rows.append(rej_dict)
         else:
-            if "Tên từng Sheet" in config["group_strategy"]: grp_val = s_name
+            # Xác định Tên Nhóm KH theo cấu hình linh hoạt
+            if "Tên từng File" in config["group_strategy"]:
+                grp_val = file_base_name
+            elif "Tên từng Sheet" in config["group_strategy"]:
+                grp_val = s_name
             elif "Một cột trong bảng" in config["group_strategy"]:
                 grp_val = safe_str(r.get(s_group_col), config["fixed_group_val"]) if s_group_col else config["fixed_group_val"]
-            else: grp_val = config["fixed_group_val"]
+            else:
+                grp_val = config["fixed_group_val"]
 
             valid_rows.append({
                 "Cơ sở (*)": config["val_coso"],
@@ -291,33 +272,38 @@ def process_sheet_data(s_name, file_bytes, config):
 # ==============================================================================
 # 4. GIAO DIỆN CHÍNH STREAMLIT
 # ==============================================================================
-uploaded_file = st.file_uploader("1. Tải file Excel của khách hàng (.xlsx, .xls)", type=["xlsx", "xls"])
+uploaded_files = st.file_uploader(
+    "1. Tải lên 1 hoặc nhiều file Excel (.xlsx, .xls):",
+    type=["xlsx", "xls"],
+    accept_multiple_files=True
+)
 
-if uploaded_file:
-    file_bytes = uploaded_file.getvalue()
-    all_sheet_names = get_sheet_names(file_bytes)
+if uploaded_files:
+    st.success(f"📂 Đã nạp **{len(uploaded_files)} file** thành công!")
+    
+    # Tạo danh bạ file để người dùng tra cứu
+    file_map = {f.name: f.getvalue() for f in uploaded_files}
+    sample_file_name = list(file_map.keys())[0]
+    sample_file_bytes = file_map[sample_file_name]
+
+    all_sheet_names = get_sheet_names(sample_file_bytes)
 
     st.markdown("---")
     st.subheader("BƯỚC 1: HỆ THỐNG TỰ ĐỘNG DÒ TÌM & GỢI Ý CẤU HÌNH")
+    st.caption(f"💡 Đang dùng file **`{sample_file_name}`** làm mẫu cấu hình chuẩn.")
 
-    selected_sheets = st.multiselect(
-        "📁 Các Sheet cần xử lý:",
-        options=all_sheet_names, default=all_sheet_names,
-    )
-    if not selected_sheets: st.stop()
-
-    preview_sheet_ref = selected_sheets[0]
-    raw_preview_df = load_sheet(file_bytes, sheet_name=preview_sheet_ref, header=None, nrows=15)
+    preview_sheet_ref = all_sheet_names[0]
+    raw_preview_df = load_sheet(sample_file_bytes, sheet_name=preview_sheet_ref, header=None, nrows=15)
     detected_header_idx = auto_detect_header_row_smart(raw_preview_df)
 
     col_hdr1, col_hdr2 = st.columns([1, 3])
     with col_hdr1:
         header_row_excel = st.number_input("📌 Dòng tiêu đề trên Sheet mẫu:", min_value=1, max_value=15, value=int(detected_header_idx + 1))
     with col_hdr2:
-        st.info(f"💡 Đang dùng Sheet **'{preview_sheet_ref}'** làm mẫu cấu hình.")
+        st.info(f"💡 Tất cả các file và sheet được tải lên sẽ tự động đồng bộ theo dòng tiêu đề số **{header_row_excel}**.")
 
     current_header_idx = int(header_row_excel) - 1
-    df_sample = load_sheet(file_bytes, sheet_name=preview_sheet_ref, header=current_header_idx)
+    df_sample = load_sheet(sample_file_bytes, sheet_name=preview_sheet_ref, header=current_header_idx)
     valid_cols = [str(c).strip() for c in df_sample.columns if not str(c).startswith("Unnamed:") and pd.notna(c)]
     
     dropdown_opts = ["-- Bỏ trống --", ">> Nhập giá trị cố định <<"] + valid_cols
@@ -349,11 +335,20 @@ if uploaded_file:
             required_second_field = st.selectbox("👉 Trường bắt buộc thứ 2 đi kèm:", ["Điện thoại liên lạc (*)", "Mã định danh", "Địa chỉ/Ghi chú", "Email liên lạc", "Không (Chỉ cần Họ tên)"], index=0)
 
     st.markdown("---")
-    val_coso = st.text_input("🏢 Tên Cơ sở (Nhập tay, áp dụng chung cho toàn bộ danh sách):", value="", placeholder="Ví dụ: Trường Mầm non Ánh Dương...")
+    val_coso = st.text_input("🏢 Tên Cơ sở (Áp dụng chung cho tất cả khách hàng trong tất cả các file):", value="", placeholder="Ví dụ: Trường Mầm non Ánh Dương...")
 
     col_map1, col_map2 = st.columns(2)
     with col_map1:
-        group_strategy = st.radio("🏢 Nhóm KH xác định theo:", ["Tên từng Sheet", "Một cột trong bảng", "Nhập tên cố định"])
+        group_strategy = st.radio(
+            "🏢 Nhóm KH xác định theo:", 
+            [
+                "Tên từng File (Bỏ đuôi .xlsx - Thích hợp khi mỗi lớp/tòa là 1 file)", 
+                "Tên từng Sheet (Thích hợp khi gộp chung trong 1 file)", 
+                "Một cột trong bảng", 
+                "Nhập tên cố định"
+            ],
+            index=0 if len(uploaded_files) > 1 else 1
+        )
         group_col = st.selectbox("Cột Nhóm:", dropdown_opts) if "Một cột" in group_strategy else None
         fixed_group_val = st.text_input("Tên nhóm chung:", value="Khách hàng chung") if "cố định" in group_strategy else ""
         
@@ -414,13 +409,18 @@ if uploaded_file:
     # LIVE PREVIEW CHI TIẾT
     # ==============================================================================
     st.markdown("---")
-    st.subheader("🔍 LIVE PREVIEW - CHI TIẾT THEO TỪNG SHEET")
-    selected_preview_sheet = st.selectbox("👉 Chọn Sheet muốn xem chi tiết:", options=selected_sheets)
+    st.subheader("🔍 LIVE PREVIEW - CHI TIẾT THEO TỪNG FILE")
+    
+    sel_pv_file = st.selectbox("👉 Chọn File muốn xem trước kết quả:", options=list(file_map.keys()))
+    sel_pv_bytes = file_map[sel_pv_file]
+    sel_pv_sheets = get_sheet_names(sel_pv_bytes)
+    sel_pv_sheet = st.selectbox("👉 Chọn Sheet:", options=sel_pv_sheets)
 
-    v_rows, r_rows, _, col_name_found, is_missing = process_sheet_data(selected_preview_sheet, file_bytes, config)
+    base_fname = os.path.splitext(sel_pv_file)[0]
+    v_rows, r_rows, _, col_name_found, is_missing = process_sheet_data(sel_pv_sheet, sel_pv_bytes, config, base_fname)
 
     if is_missing:
-        st.error(f"🚨 KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN trên sheet '{selected_preview_sheet}'!")
+        st.error(f"🚨 KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN trên file '{sel_pv_file}' sheet '{sel_pv_sheet}'!")
 
     col_pv1, col_pv2 = st.columns(2)
     col_pv1.metric("✅ HỢP LỆ (Thành công)", f"{len(v_rows)} dòng")
@@ -435,13 +435,13 @@ if uploaded_file:
         else: st.success("Không có dòng bị loại!")
 
     # ==============================================================================
-    # XUẤT FILE HOÀN CHỈNH
+    # XUẤT FILE HOÀN CHỈNH GỘP TẤT CẢ FILE
     # ==============================================================================
     st.markdown("---")
     st.subheader("BƯỚC 3: XÁC NHẬN VÀ XUẤT TOÀN BỘ FILE")
     output_filename = st.text_input("Tên file xuất ra:", value="Ket_Qua_Nhap_Lieu_FinOne.xlsx")
 
-    if st.button("🚀 XÁC NHẬN & GỘP TẤT CẢ SHEET VÀO FILE MẪU", type="primary"):
+    if st.button("🚀 XÁC NHẬN & GỘP TẤT CẢ FILE VÀO MẪU FINONE", type="primary"):
         template_file = "mau-nhap-lieu-khach-hang.xlsx"
         if not os.path.exists(template_file):
             st.error(f"❌ Không tìm thấy file mẫu [{template_file}]!")
@@ -453,17 +453,29 @@ if uploaded_file:
         total_valid, total_rejected = 0, 0
         summary_stats, all_rejected_rows, bulk_write_data = [], [], []
 
-        for s_name in selected_sheets:
-            v_rows, r_rows, hdr_text, col_text, is_missing = process_sheet_data(s_name, file_bytes, config)
-            for row_dict in v_rows:
-                bulk_write_data.append(row_dict)
-                total_valid += 1
-            total_rejected += len(r_rows)
-            all_rejected_rows.extend(r_rows)
-            summary_stats.append({
-                "Tên Sheet": s_name, "Dòng Header": hdr_text, "Cột Tên": col_text,
-                "Số dòng Hợp lệ": len(v_rows), "Số dòng Bị loại": len(r_rows),
-            })
+        # Quét lần lượt qua tất cả các File được tải lên
+        for fname, fbytes in file_map.items():
+            base_n = os.path.splitext(fname)[0]
+            try:
+                sheet_list = get_sheet_names(fbytes)
+            except Exception:
+                sheet_list = ["Sheet1"]
+
+            for s_name in sheet_list:
+                v_rows, r_rows, hdr_text, col_text, is_missing = process_sheet_data(s_name, fbytes, config, base_n)
+                for row_dict in v_rows:
+                    bulk_write_data.append(row_dict)
+                    total_valid += 1
+                total_rejected += len(r_rows)
+                all_rejected_rows.extend(r_rows)
+                summary_stats.append({
+                    "Tên File": fname,
+                    "Tên Sheet": s_name, 
+                    "Dòng Header": hdr_text, 
+                    "Cột Tên": col_text,
+                    "Số dòng Hợp lệ": len(v_rows), 
+                    "Số dòng Bị loại": len(r_rows),
+                })
 
         col_mapping = {
             "Cơ sở (*)": 2,          # Cột B
@@ -498,7 +510,7 @@ if uploaded_file:
         wb.save(output_buffer)
         output_buffer.seek(0)
 
-        st.success(f"🎉 Đã gộp thành công **{total_valid} khách hàng** từ **{len(selected_sheets)} Sheet**!")
+        st.success(f"🎉 Đã gộp thành công **{total_valid} khách hàng** từ **{len(uploaded_files)} File**!")
         st.info(f"✅ **Đối soát quân số:** Tổng dòng quét = **{total_valid + total_rejected}** | Hợp lệ = **{total_valid}** | Bị loại = **{total_rejected}**")
 
         tab_final1, tab_final2 = st.tabs(["📥 Tải File Hoàn Chỉnh (FinOne)", "❌ Báo Cáo Tổng Hợp Dòng Bị Loại"])
