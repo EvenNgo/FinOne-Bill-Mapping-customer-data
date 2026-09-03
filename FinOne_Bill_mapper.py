@@ -140,7 +140,7 @@ def process_sheet_data_adaptive(s_name, file_bytes, config, file_base_name=""):
 
     valid_rows = []
 
-    # TRƯỜNG HỢP 1: File chuẩn có Header (như Chồi 1, Lá 1, Mầm 1...)
+    # TRƯỜNG HỢP 1: File chuẩn có Header
     if has_header:
         df_sheet = load_sheet(file_bytes, sheet_name=s_name, header=detected_h_idx)
         cols_list = df_sheet.columns.tolist()
@@ -263,7 +263,7 @@ if uploaded_files:
 
     # ĐỂ TRỐNG Ô CƠ SỞ ĐỂ NGƯỜI DÙNG TỰ NHẬP
     val_coso = st.text_input(
-        "🏢 Tên Cơ sở (*) (Nhập tên trường/cơ sở áp dụng chung cho tất cả khách hàng):", 
+        "🏢 Tên Cơ sở (*):", 
         value="", 
         placeholder="Ví dụ: Trường Mầm Non Hoa Sen, Tòa nhà Bitexco..."
     )
@@ -271,9 +271,9 @@ if uploaded_files:
     col1, col2 = st.columns(2)
     with col1:
         grp_strategy = st.radio(
-            "🏢 Cách đặt tên Nhóm KH (Lớp học):",
+            "🏢 Cách đặt tên Nhóm KH:",
             [
-                "Tên từng File (Bỏ đuôi .xlsx - File 'Chồi 1.xlsx' thành lớp 'Chồi 1')",
+                "Tên từng File (Bỏ đuôi .xlsx)",
                 "Tên từng Sheet",
                 "Nhập tên cố định"
             ],
