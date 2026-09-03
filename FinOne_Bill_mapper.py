@@ -281,7 +281,7 @@ if uploaded_files:
         )
         name_mode = st.radio(
             "👤 Cấu trúc Họ và Tên:",
-            ["Tách riêng 2 cột (Họ đệm + Tên)", "Họ và Tên gộp chung 1 cột"],
+            ["Tách riêng 2 cột (Họ đệm + Tên)", "Họ và Tên chung 1 cột"],
             index=0
         )
         if name_mode == "Tách riêng 2 cột (Họ đệm + Tên)":
@@ -311,7 +311,7 @@ if uploaded_files:
     st.markdown("---")
     output_filename = st.text_input("Tên file xuất ra:", value="Ket_Qua_Nhap_Lieu_Khach_Hang.xlsx")
 
-    if st.button("🚀 GỘP TOÀN BỘ FILE VÀO MẪU FINONE", type="primary"):
+    if st.button("GỘP DATA", type="primary"):
         if not val_coso.strip():
             st.warning("⚠️ Bạn chưa nhập 'Tên Cơ sở (*)', vui lòng điền tên cơ sở ở Bước 2 trước khi gộp file!")
             st.stop()
@@ -374,7 +374,7 @@ if uploaded_files:
         wb.save(out_buf)
         out_buf.seek(0)
 
-        st.success(f"🎉 Đã gộp thành công toàn bộ **{total_valid} học sinh**!")
+        st.success(f"🎉 Đã gộp thành công toàn bộ **{total_valid} khách hàng**!")
         st.dataframe(pd.DataFrame(summary_stats), use_container_width=True)
 
         st.download_button(
