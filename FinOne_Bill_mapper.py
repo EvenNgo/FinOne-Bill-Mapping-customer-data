@@ -31,37 +31,58 @@ KEYWORDS = {
 # 2. HÀM CORE & LÀM SẠCH FILE LỖI TRỰC TIẾP TRÊN RAM (CHỐNG LỖI MULTICELLRANGE)
 # ==============================================================================
 def sanitize_excel_bytes(file_bytes):
-    """
-    Tự động bóc tách và gọt bỏ các thẻ Data Validation bị hỏng (F:F, O:O, A:A) 
-    ngay trong bộ nhớ RAM, giúp đọc mượt mà file như 'Chồi 2.xlsx' mà không cần cài thêm thư viện ngoài.
-    """
-    try:
-        in_zip = zipfile.ZipFile(io.BytesIO(file_bytes), "r")
-        out_buf = io.BytesIO()
-        out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
+  """Tự động bóc tách và gọt bỏ các thẻ Data Validation bị hỏng (F:F, O:O, A:A)
 
-        for item in in_zip.infolist():
-            data = in_zip.read(item.filename)
-            if item.filename.startswith("xl/worksheets/sheet") and item.filename.endswith(".xml"):
-                data = re.sub(b"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>", b"", data, flags=re.DOTALL)
-                data = re.sub(b"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>", b"", data, flags=re.DOTALL)
-            out_zip.writestr(item, data)
+  trực tiếp trong RAM trước khi đưa vào Pandas.
+  """
+  try:
+    in_zip = zipfile.ZipFile(io.BytesIO(file_bytes), "r")
+    out_buf = io.BytesIO()
+    out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
 
-        out_zip.close()
-        out_buf.seek(0)
-        return out_buf.getvalue()
-    except Exception:
-        return file_bytes
+    for item in in_zip.infolist():
+      data = in_zip.read(item.filename)
+      if item.filename.startswith(
+          "xl/worksheets/sheet"
+      ) and item.filename.endswith(".xml"):
+        # Xóa sạch các thẻ gây lỗi MultiCellRange trong openpyxl
+        data = re.sub(
+            b"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>",
+            b"",
+            data,
+            flags=re.DOTALL,
+        )
+        data = re.sub(
+            b"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>",
+            b"",
+            data,
+            flags=re.DOTALL,
+        )
+      out_zip.writestr(item, data)
+
+    out_zip.close()
+    out_buf.seek(0)
+    return out_buf.getvalue()
+  except Exception:
+    return file_bytes
+
 
 @st.cache_data(show_spinner=False)
 def get_sheet_names(file_bytes):
-    safe_bytes = sanitize_excel_bytes(file_bytes)
-    return pd.ExcelFile(io.BytesIO(safe_bytes)).sheet_names
+  safe_bytes = sanitize_excel_bytes(file_bytes)
+  return pd.ExcelFile(io.BytesIO(safe_bytes)).sheet_names
+
 
 @st.cache_data(show_spinner=False)
 def load_sheet(file_bytes, sheet_name, header=None, nrows=None):
-    safe_bytes = sanitize_excel_bytes(file_bytes)
-    return pd.read_excel(io.BytesIO(safe_bytes), sheet_name=sheet_name, header=header, nrows=nrows)
+  # Bọc dữ liệu an toàn để tránh sập openpyxl
+  safe_bytes = sanitize_excel_bytes(file_bytes)
+  return pd.read_excel(
+      io.BytesIO(safe_bytes),
+      sheet_name=sheet_name,
+      header=header,
+      nrows=nrows,
+  )
 
 def find_column_by_keywords(columns, keyword_list):
     for col in columns:
