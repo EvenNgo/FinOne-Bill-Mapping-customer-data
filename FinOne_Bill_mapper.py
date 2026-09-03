@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import zipfile
 import openpyxl
 import pandas as pd
 import streamlit as st
@@ -15,7 +16,9 @@ st.title("📊 Chuyển Đổi Dữ Liệu Khách Hàng - FinOne Bill")
 # ==============================================================================
 KEYWORDS = {
     "stt": ["tt", "stt", "số tt", "số thứ tự", "no.", "no"],
-    "name": ["tên", "họ", "name", "khách hàng", "người đại diện", "chủ hộ", "họ và tên"],
+    "name": ["họ và tên", "họ tên", "tên khách hàng", "người đại diện", "chủ hộ", "học sinh", "tên", "họ"],
+    "last_name": ["họ đệm", "họ và đệm", "họ và tên đệm", "họ lót", "họ"],
+    "first_name": ["tên gọi", "tên"],
     "phone": ["điện thoại", "sđt", "sdt", "phone", "tel", "di động", "mobile", "liên hệ"],
     "id": ["mã", "id", "định danh", "cccd", "cmnd", "cmt", "mã kh", "số định danh"],
     "email": ["email", "mail", "hòm thư"],
@@ -25,35 +28,40 @@ KEYWORDS = {
 }
 
 # ==============================================================================
-# 2. HÀM CORE & CACHE THEO NHU CẦU (ON-DEMAND)
+# 2. HÀM CORE & LÀM SẠCH FILE LỖI TRỰC TIẾP TRÊN RAM (CHỐNG LỖI MULTICELLRANGE)
 # ==============================================================================
+def sanitize_excel_bytes(file_bytes):
+    """
+    Tự động bóc tách và gọt bỏ các thẻ Data Validation bị hỏng (F:F, O:O, A:A) 
+    ngay trong bộ nhớ RAM, giúp đọc mượt mà file như 'Chồi 2.xlsx' mà không cần cài thêm thư viện ngoài.
+    """
+    try:
+        in_zip = zipfile.ZipFile(io.BytesIO(file_bytes), "r")
+        out_buf = io.BytesIO()
+        out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
+
+        for item in in_zip.infolist():
+            data = in_zip.read(item.filename)
+            if item.filename.startswith("xl/worksheets/sheet") and item.filename.endswith(".xml"):
+                data = re.sub(b"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>", b"", data, flags=re.DOTALL)
+                data = re.sub(b"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>", b"", data, flags=re.DOTALL)
+            out_zip.writestr(item, data)
+
+        out_zip.close()
+        out_buf.seek(0)
+        return out_buf.getvalue()
+    except Exception:
+        return file_bytes
+
 @st.cache_data(show_spinner=False)
 def get_sheet_names(file_bytes):
-    try:
-        return pd.ExcelFile(io.BytesIO(file_bytes), engine="calamine").sheet_names
-    except Exception:
-        return pd.ExcelFile(io.BytesIO(file_bytes)).sheet_names
-
+    safe_bytes = sanitize_excel_bytes(file_bytes)
+    return pd.ExcelFile(io.BytesIO(safe_bytes)).sheet_names
 
 @st.cache_data(show_spinner=False)
 def load_sheet(file_bytes, sheet_name, header=None, nrows=None):
-    try:
-        # Thử đọc bằng calamine trước để bỏ qua các lỗi định dạng Validation hỏng
-        return pd.read_excel(
-            io.BytesIO(file_bytes),
-            sheet_name=sheet_name,
-            header=header,
-            nrows=nrows,
-            engine="calamine",
-        )
-    except Exception:
-        # Nếu môi trường chưa có calamine thì dùng openpyxl mặc định
-        return pd.read_excel(
-            io.BytesIO(file_bytes),
-            sheet_name=sheet_name,
-            header=header,
-            nrows=nrows,
-        )
+    safe_bytes = sanitize_excel_bytes(file_bytes)
+    return pd.read_excel(io.BytesIO(safe_bytes), sheet_name=sheet_name, header=header, nrows=nrows)
 
 def find_column_by_keywords(columns, keyword_list):
     for col in columns:
@@ -89,25 +97,28 @@ def auto_detect_header_row_smart(raw_df):
 
 def clean_phone(phone_val):
     if pd.isna(phone_val): return ""
-    # Chặt bỏ đuôi .0 nếu Excel tự nhận thành số thập phân (VD: 987654321.0)
-    val_str = str(phone_val).strip().split(".")[0]
-    if val_str.lower() in ["0", "none", "nan", "null", ""]: return ""
-    
-    digits = re.sub(r"\D", "", val_str)
-    if not digits: return ""
-    
-    if digits.startswith("84") and len(digits) == 11:
-        digits = "0" + digits[2:]
-    elif len(digits) == 9 and not digits.startswith("0"):
-        digits = "0" + digits
+    val_str = str(phone_val).strip()
+    if val_str.endswith(".0"): 
+        val_str = val_str[:-2]
+    if val_str.lower() in ["none", "nan", "null", ""]: 
+        return ""
+    if val_str == "0": 
+        return "0"
         
+    digits = re.sub(r"\D", "", val_str)
+    if not digits: return val_str
+    
+    if digits.startswith("84") and len(digits) == 11: 
+        digits = "0" + digits[2:]
+    elif len(digits) == 9 and not digits.startswith("0"): 
+        digits = "0" + digits
     return digits
 
 def safe_str(val, default=""):
     if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
         return default
     s = str(val).strip()
-    if s.lower() in ("nan", "none", "null", "0", "0.0") and default == "":
+    if s.lower() in ("nan", "none", "null") and default == "":
         return ""
     return default if s.lower() in ("nan", "none", "null") else s
 
@@ -126,21 +137,41 @@ def process_sheet_data(s_name, file_bytes, config):
         return [], [], f"Dòng {h_idx+1}", "Trống", False
 
     cols_list = df_sheet.columns.tolist()
-    s_name_col = resolve_column_for_sheet(cols_list, config["map_name"], "name")
 
-    if not s_name_col:
-        rejected_all = []
-        for idx, r in df_sheet.iterrows():
-            excel_row_num = h_idx + idx + 2
-            rej_dict = {
-                "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
-                "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN (Cấu trúc cột khác sheet mẫu)",
-            }
-            for k, v in r.items():
-                if not str(k).startswith("Unnamed:") and pd.notna(k):
-                    rej_dict[str(k)] = "" if pd.isna(v) else str(v)
-            rejected_all.append(rej_dict)
-        return [], rejected_all, f"Dòng {h_idx+1}", "❌ KHÔNG TÌM THẤY", True
+    s_name_col, s_last_name_col, s_first_name_col = None, None, None
+    if config.get("name_mode") == "Tách riêng 2 cột (Họ đệm + Tên)":
+        s_last_name_col = resolve_column_for_sheet(cols_list, config.get("map_last_name"), "last_name")
+        s_first_name_col = resolve_column_for_sheet(cols_list, config.get("map_first_name"), "first_name")
+        if not s_first_name_col and not s_last_name_col:
+            rejected_all = []
+            for idx, r in df_sheet.iterrows():
+                excel_row_num = h_idx + idx + 2
+                rej_dict = {
+                    "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
+                    "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT HỌ / TÊN (Cấu trúc cột khác sheet mẫu)",
+                }
+                for k, v in r.items():
+                    if not str(k).startswith("Unnamed:") and pd.notna(k):
+                        rej_dict[str(k)] = "" if pd.isna(v) else str(v)
+                rejected_all.append(rej_dict)
+            return [], rejected_all, f"Dòng {h_idx+1}", "❌ KHÔNG TÌM THẤY", True
+        col_display_name = f"{s_last_name_col} + {s_first_name_col}"
+    else:
+        s_name_col = resolve_column_for_sheet(cols_list, config["map_name"], "name")
+        if not s_name_col:
+            rejected_all = []
+            for idx, r in df_sheet.iterrows():
+                excel_row_num = h_idx + idx + 2
+                rej_dict = {
+                    "Tên Sheet": s_name, "Dòng Excel số": excel_row_num,
+                    "Lý do loại bỏ": "KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN (Cấu trúc cột khác sheet mẫu)",
+                }
+                for k, v in r.items():
+                    if not str(k).startswith("Unnamed:") and pd.notna(k):
+                        rej_dict[str(k)] = "" if pd.isna(v) else str(v)
+                rejected_all.append(rej_dict)
+            return [], rejected_all, f"Dòng {h_idx+1}", "❌ KHÔNG TÌM THẤY", True
+        col_display_name = str(s_name_col)
 
     s_phone_col = resolve_column_for_sheet(cols_list, config["map_phone"], "phone")
     s_id_col = resolve_column_for_sheet(cols_list, config["map_id"], "id")
@@ -154,22 +185,23 @@ def process_sheet_data(s_name, file_bytes, config):
         s_group_col = resolve_column_for_sheet(cols_list, config.get("group_col"), "group")
 
     valid_rows, rejected_rows = [], []
-
-    garbage_phrases = [
-        "tổng cộng", "tổng số", "tổng tiền", "tổng:", "cộng:",
-        "người lập biểu", "người lập", "ký tên", "kế toán trưởng",
-        "kế toán", "xác nhận", "trưởng phòng", "chữ ký",
-        "đvt:", "đơn vị tính", "bằng chữ:", "bằng chữ"
-    ]
+    garbage_phrases = ["tổng cộng", "tổng số", "tổng tiền", "tổng:", "cộng:", "người lập", "ký tên", "kế toán", "xác nhận", "trưởng phòng", "chữ ký", "đvt:", "đơn vị tính", "bằng chữ:"]
 
     for idx, r in df_sheet.iterrows():
         excel_row_num = h_idx + idx + 2
         is_val, reason = True, ""
 
-        name_val = r.get(s_name_col, "")
-        name_str = str(name_val).strip()
-        lower_name = name_str.lower()
+        if config.get("name_mode") == "Tách riêng 2 cột (Họ đệm + Tên)":
+            part_last = str(r.get(s_last_name_col, "")).strip() if s_last_name_col and pd.notna(r.get(s_last_name_col)) else ""
+            part_first = str(r.get(s_first_name_col, "")).strip() if s_first_name_col and pd.notna(r.get(s_first_name_col)) else ""
+            if part_last.lower() in ["nan", "none", "null"]: part_last = ""
+            if part_first.lower() in ["nan", "none", "null"]: part_first = ""
+            name_str = re.sub(r"\s+", " ", f"{part_last} {part_first}").strip()
+        else:
+            name_val = r.get(s_name_col, "")
+            name_str = str(name_val).strip()
 
+        lower_name = name_str.lower()
         v_phone = config["fix_phone"] if config["map_phone"] == ">> Nhập giá trị cố định <<" else r.get(s_phone_col, "")
         v_id = config["fix_id"] if config["map_id"] == ">> Nhập giá trị cố định <<" else r.get(s_id_col, "")
         v_email = config["fix_email"] if config["map_email"] == ">> Nhập giá trị cố định <<" else r.get(s_email_col, "")
@@ -177,36 +209,36 @@ def process_sheet_data(s_name, file_bytes, config):
         v_comp = config["fix_company"] if config["map_company"] == ">> Nhập giá trị cố định <<" else r.get(s_comp_col, "")
 
         if not name_str or lower_name in ["nan", "none", "null", ""]:
-            is_val, reason = False, "[Loại 3] - Thiếu Tên khách hàng"
+            is_val = False
+            reason = "[Loại 3] - Thiếu Tên khách hàng"
         elif any(phrase in lower_name for phrase in garbage_phrases):
-            is_val, reason = False, f"[Loại 2] - Dòng tiêu đề rác / chữ ký ('{name_str}')"
+            is_val = False
+            reason = f"[Loại 2] - Dòng tiêu đề rác / chữ ký ('{name_str}')"
         elif re.search(r"ngày\s*[\.\d]*\s*tháng\s*[\.\d]*\s*năm", lower_name):
-            is_val, reason = False, f"[Loại 2] - Dòng ngày tháng ('{name_str}')"
+            is_val = False
+            reason = f"[Loại 2] - Dòng ngày tháng ('{name_str}')"
         elif "Option 1" in config["filter_mode"]:
             if s_stt_col and s_stt_col != "-- Bỏ trống --":
                 stt_val = r.get(s_stt_col)
                 if pd.isna(stt_val) or str(stt_val).strip() == "":
-                    is_val, reason = False, "[Loại 1] - Cột STT trống (Tiêu đề nhóm)"
+                    is_val = False
+                    reason = "[Loại 1] - Cột STT trống (Tiêu đề nhóm)"
                 else:
                     try:
-                        if float(str(stt_val).strip()) <= 0: is_val, reason = False, "[Loại 1] - STT không hợp lệ (<= 0)"
+                        if float(str(stt_val).strip()) <= 0:
+                            is_val = False
+                            reason = "[Loại 1] - STT không hợp lệ (<= 0)"
                     except ValueError:
-                        is_val, reason = False, f"[Loại 1] - STT không phải số ('{stt_val}')"
+                        is_val = False
+                        reason = f"[Loại 1] - STT không phải số ('{stt_val}')"
         elif "Option 2" in config["filter_mode"] and config["required_second_field"] != "Không (Chỉ cần Họ tên)":
             if "Điện thoại" in config["required_second_field"]:
                 if not v_phone or str(v_phone).strip() == "" or str(v_phone).strip().lower() in ["nan", "none"]:
-                    is_val, reason = False, "Thiếu thông tin bắt buộc: [Điện thoại liên lạc]"
+                    is_val = False
+                    reason = "Thiếu thông tin bắt buộc: [Điện thoại liên lạc]"
                 elif not clean_phone(v_phone):
-                    is_val, reason = False, f"SĐT không hợp lệ hoặc không đủ 10 số: '{v_phone}'"
-            elif "Mã định danh" in config["required_second_field"]:
-                if not v_id or str(v_id).strip() == "" or str(v_id).strip().lower() in ["nan", "none"]:
-                    is_val, reason = False, "Thiếu thông tin bắt buộc: [Mã định danh]"
-            elif "Địa chỉ" in config["required_second_field"]:
-                if not v_addr or str(v_addr).strip() == "" or str(v_addr).strip().lower() in ["nan", "none"]:
-                    is_val, reason = False, "Thiếu thông tin bắt buộc: [Địa chỉ/Ghi chú]"
-            elif "Email" in config["required_second_field"]:
-                if not v_email or str(v_email).strip() == "" or str(v_email).strip().lower() in ["nan", "none"]:
-                    is_val, reason = False, "Thiếu thông tin bắt buộc: [Email liên lạc]"
+                    is_val = False
+                    reason = f"SĐT không hợp lệ: '{v_phone}'"
 
         if not is_val:
             if not pd.isna(r.values).all():
@@ -233,8 +265,7 @@ def process_sheet_data(s_name, file_bytes, config):
                 "Tên doanh nghiệp": safe_str(v_comp),
             })
 
-    return valid_rows, rejected_rows, f"Dòng {h_idx+1}", str(s_name_col), False
-
+    return valid_rows, rejected_rows, f"Dòng {h_idx+1}", col_display_name, False
 
 # ==============================================================================
 # 4. GIAO DIỆN CHÍNH STREAMLIT
@@ -249,7 +280,7 @@ if uploaded_file:
     st.subheader("BƯỚC 1: HỆ THỐNG TỰ ĐỘNG DÒ TÌM & GỢI Ý CẤU HÌNH")
 
     selected_sheets = st.multiselect(
-        "📁 Các Sheet cần xử lý (Mặc định chọn tất cả, bỏ tích nếu có sheet thừa):",
+        "📁 Các Sheet cần xử lý:",
         options=all_sheet_names, default=all_sheet_names,
     )
     if not selected_sheets: st.stop()
@@ -262,7 +293,7 @@ if uploaded_file:
     with col_hdr1:
         header_row_excel = st.number_input("📌 Dòng tiêu đề trên Sheet mẫu:", min_value=1, max_value=15, value=int(detected_header_idx + 1))
     with col_hdr2:
-        st.info(f"💡 Đang dùng Sheet **'{preview_sheet_ref}'** làm mẫu cấu hình. Tất cả Sheet khác sẽ tự động đồng bộ.")
+        st.info(f"💡 Đang dùng Sheet **'{preview_sheet_ref}'** làm mẫu cấu hình.")
 
     current_header_idx = int(header_row_excel) - 1
     df_sample = load_sheet(file_bytes, sheet_name=preview_sheet_ref, header=current_header_idx)
@@ -276,7 +307,6 @@ if uploaded_file:
 
     st.markdown("---")
     st.subheader("BƯỚC 2: CHỌN CHẾ ĐỘ LỌC DỮ LIỆU & GHÉP CỘT")
-    st.write("🛡️ **Thiết lập chế độ lọc bỏ dòng rác / tiêu đề phụ:**")
 
     filter_mode = st.selectbox(
         "Chọn chế độ kiểm tra dữ liệu:",
@@ -289,7 +319,6 @@ if uploaded_file:
     )
 
     col_stt_selected, required_second_field = None, None
-
     if "Option 1" in filter_mode:
         col_stt_selected = st.selectbox("👉 Chọn cột Số Thứ Tự (STT/TT):", dropdown_opts, index=get_auto_index("stt"))
     elif "Option 2" in filter_mode:
@@ -299,9 +328,7 @@ if uploaded_file:
             required_second_field = st.selectbox("👉 Trường bắt buộc thứ 2 đi kèm:", ["Điện thoại liên lạc (*)", "Mã định danh", "Địa chỉ/Ghi chú", "Email liên lạc", "Không (Chỉ cần Họ tên)"], index=0)
 
     st.markdown("---")
-    st.write("🔗 **Ghép các cột dữ liệu vào mẫu FinOne Bill:**")
-
-    val_coso = st.text_input("🏢 Tên Cơ sở (Nhập tay, hệ thống sẽ áp dụng cho tất cả khách hàng):", value="", placeholder="Ví dụ: Tòa nhà BMG...")
+    val_coso = st.text_input("🏢 Tên Cơ sở (Nhập tay, áp dụng chung cho toàn bộ danh sách):", value="", placeholder="Ví dụ: Trường Mầm non Ánh Dương...")
 
     col_map1, col_map2 = st.columns(2)
     with col_map1:
@@ -309,7 +336,21 @@ if uploaded_file:
         group_col = st.selectbox("Cột Nhóm:", dropdown_opts) if "Một cột" in group_strategy else None
         fixed_group_val = st.text_input("Tên nhóm chung:", value="Khách hàng chung") if "cố định" in group_strategy else ""
         
-        m_name = st.selectbox("1. Cột Tên khách hàng (*):", dropdown_opts, index=get_auto_index("name"))
+        name_mode = st.radio(
+            "👤 Định dạng cột Họ và Tên:",
+            ["Họ và Tên gộp chung 1 cột", "Tách riêng 2 cột (Họ đệm + Tên)"],
+            index=1 if (find_column_by_keywords(valid_cols, KEYWORDS["last_name"]) and find_column_by_keywords(valid_cols, KEYWORDS["first_name"])) else 0
+        )
+
+        m_name, m_last_name, m_first_name = None, None, None
+        if name_mode == "Tách riêng 2 cột (Họ đệm + Tên)":
+            c_name_a, c_name_b = st.columns(2)
+            with c_name_a:
+                m_last_name = st.selectbox("1a. Cột Họ / Họ đệm (*):", dropdown_opts, index=get_auto_index("last_name"))
+            with c_name_b:
+                m_first_name = st.selectbox("1b. Cột Tên (*):", dropdown_opts, index=get_auto_index("first_name"))
+        else:
+            m_name = st.selectbox("1. Cột Tên khách hàng (*):", dropdown_opts, index=get_auto_index("name"))
         
         m_phone = st.selectbox("2. Cột Điện thoại (*):", dropdown_opts, index=get_auto_index("phone"))
         f_phone = st.text_input("✍️ Nhập số điện thoại cố định:") if m_phone == ">> Nhập giá trị cố định <<" else ""
@@ -337,7 +378,10 @@ if uploaded_file:
         "group_strategy": group_strategy,
         "group_col": group_col,
         "fixed_group_val": fixed_group_val,
+        "name_mode": name_mode,
         "map_name": m_name,
+        "map_last_name": m_last_name,
+        "map_first_name": m_first_name,
         "map_phone": m_phone, "fix_phone": f_phone,
         "map_id": m_id, "fix_id": f_id,
         "map_email": m_email, "fix_email": f_email,
@@ -355,7 +399,7 @@ if uploaded_file:
     v_rows, r_rows, _, col_name_found, is_missing = process_sheet_data(selected_preview_sheet, file_bytes, config)
 
     if is_missing:
-        st.error(f"🚨 KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN trên sheet '{selected_preview_sheet}'! Vui lòng kiểm tra lại cấu trúc cột của sheet này.")
+        st.error(f"🚨 KHÔNG XÁC ĐỊNH ĐƯỢC CỘT TÊN trên sheet '{selected_preview_sheet}'!")
 
     col_pv1, col_pv2 = st.columns(2)
     col_pv1.metric("✅ HỢP LỆ (Thành công)", f"{len(v_rows)} dòng")
@@ -400,7 +444,6 @@ if uploaded_file:
                 "Số dòng Hợp lệ": len(v_rows), "Số dòng Bị loại": len(r_rows),
             })
 
-        # Ghi đích danh vào từng cột của FinOne (Chống lệnh lệch cột 100%)
         col_mapping = {
             "Cơ sở (*)": 2,          # Cột B
             "Nhóm KH (*)": 3,        # Cột C
@@ -417,17 +460,13 @@ if uploaded_file:
         for row_data in bulk_write_data:
             for key, col_idx in col_mapping.items():
                 cell_val = row_data.get(key, "")
-                
-                # Ép chặt thành rỗng nếu dữ liệu là 0, NaN, None (Tránh hiển thị số 0 vô duyên)
-                safe_val = "" if str(cell_val).strip().lower() in ["", "none", "nan", "null", "0", "0.0"] or (isinstance(cell_val, float) and pd.isna(cell_val)) else str(cell_val).strip()
+                safe_val = "" if str(cell_val).strip().lower() in ["", "none", "nan", "null"] or (isinstance(cell_val, float) and pd.isna(cell_val)) else str(cell_val).strip()
                 
                 cell = ws.cell(row=current_row, column=col_idx)
                 
-                # CHỐT CHẶN BẢO VỆ: Ép định dạng Text trong Excel cho số Điện Thoại và ID 
-                # để không bao giờ bị rụng mất số 0 ở đầu (VD: 098... không bị biến thành 98...)
                 if key in ["Điện thoại (*)", "Mã định danh"]:
-                    cell.data_type = 's'  # Ép thư viện Python ghi dưới dạng String
-                    cell.number_format = '@'  # Ép Excel hiển thị dưới định dạng Text
+                    cell.data_type = 's'
+                    cell.number_format = '@'
                     cell.value = safe_val
                 else:
                     cell.value = safe_val
@@ -439,7 +478,6 @@ if uploaded_file:
         output_buffer.seek(0)
 
         st.success(f"🎉 Đã gộp thành công **{total_valid} khách hàng** từ **{len(selected_sheets)} Sheet**!")
-        
         st.info(f"✅ **Đối soát quân số:** Tổng dòng quét = **{total_valid + total_rejected}** | Hợp lệ = **{total_valid}** | Bị loại = **{total_rejected}**")
 
         tab_final1, tab_final2 = st.tabs(["📥 Tải File Hoàn Chỉnh (FinOne)", "❌ Báo Cáo Tổng Hợp Dòng Bị Loại"])
