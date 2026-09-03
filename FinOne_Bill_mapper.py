@@ -29,11 +29,31 @@ KEYWORDS = {
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def get_sheet_names(file_bytes):
-    return pd.ExcelFile(io.BytesIO(file_bytes)).sheet_names
+    try:
+        return pd.ExcelFile(io.BytesIO(file_bytes), engine="calamine").sheet_names
+    except Exception:
+        return pd.ExcelFile(io.BytesIO(file_bytes)).sheet_names
+
 
 @st.cache_data(show_spinner=False)
 def load_sheet(file_bytes, sheet_name, header=None, nrows=None):
-    return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, header=header, nrows=nrows)
+    try:
+        # Thử đọc bằng calamine trước để bỏ qua các lỗi định dạng Validation hỏng
+        return pd.read_excel(
+            io.BytesIO(file_bytes),
+            sheet_name=sheet_name,
+            header=header,
+            nrows=nrows,
+            engine="calamine",
+        )
+    except Exception:
+        # Nếu môi trường chưa có calamine thì dùng openpyxl mặc định
+        return pd.read_excel(
+            io.BytesIO(file_bytes),
+            sheet_name=sheet_name,
+            header=header,
+            nrows=nrows,
+        )
 
 def find_column_by_keywords(columns, keyword_list):
     for col in columns:
