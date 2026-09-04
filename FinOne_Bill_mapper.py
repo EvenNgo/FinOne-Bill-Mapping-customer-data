@@ -41,11 +41,37 @@ def auto_detect_header_row_smart(raw_df):
     best_row, max_matches = 0, 0
     for r_idx in range(min(15, len(raw_df))):
         row_vals = [str(v).lower().strip() for v in raw_df.iloc[r_idx].values if pd.notna(v)]
-        row_text = " ".join(row_vals)
-        matches = sum(1 for kws in KEYWORDS.values() if any(k in row_text for k in kws))
+        matches = 0
+        
+        for kws in KEYWORDS.values():
+            cat_matched = False
+            for kw in kws:
+                for cell_val in row_vals:
+                    # Tránh nhận diện sai các từ ngắn (VD: chữ "kh" trong "Khang", "tt" trong "Thắng")
+                    if len(kw) <= 3:
+                        # Chỉ cộng điểm nếu từ khóa ngắn đứng độc lập (khớp hoàn toàn hoặc là một từ riêng)
+                        if kw == cell_val or kw in re.findall(r'\b\w+\b', cell_val):
+                            cat_matched = True
+                            break
+                    else:
+                        # Các từ khóa dài (như "họ và tên", "điện thoại") thì cứ chứa chuỗi là được
+                        if kw in cell_val:
+                            cat_matched = True
+                            break
+                if cat_matched: break
+            if cat_matched: matches += 1
+            
         if matches > max_matches:
             max_matches = matches
             best_row = r_idx
+            
+    # ĐẶT NGƯỠNG TÍN NHIỆM: 
+    # Phải có ít nhất 2 cột khớp từ khóa chuẩn thì mới được công nhận là dòng Header.
+    # Nếu ít hơn (VD: File Trẻ 1 không có tiêu đề, chỉ vô tình có chữ "phường"), 
+    # hệ thống sẽ trả về 0 để ép kích hoạt "AI Cảm Biến" đọc toàn bộ file.
+    if max_matches < 2:
+        return 0, 0
+        
     return best_row, max_matches
 
 # ==============================================================================
