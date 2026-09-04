@@ -54,32 +54,33 @@ def auto_detect_header_row_smart(raw_df):
 def resolve_column_super_sensor(df, target_col, category):
     cols = df.columns.tolist()
     
-    # ƯU TIÊN 1: Map đích danh từ giao diện người dùng
+    # ƯU TIÊN 1: Map đích danh
     if target_col and target_col not in ["-- Bỏ trống --", ">> Nhập giá trị cố định <<"]:
         for c in cols:
             if str(c).strip().lower() == str(target_col).strip().lower(): return c
                 
-    # ƯU TIÊN 2: Quét Keyword trong tiêu đề (Mega Dictionary)
+    # ƯU TIÊN 2: Quét Keyword
     if category in KEYWORDS:
         for c in cols:
             c_str = str(c).lower().strip()
             if any(kw == c_str or kw in c_str for kw in KEYWORDS[category]): return c
 
-    # ƯU TIÊN 3: CẢM BIẾN DỮ LIỆU (Kích hoạt khi file mất/sai tiêu đề hoàn toàn)
+    # ƯU TIÊN 3: CẢM BIẾN DỮ LIỆU
     best_col = None
     best_score = 0
     
     for c in cols:
-        sample = df[c].dropna().astype(str).str.strip().head(15).tolist()
+        sample_raw = df[c].dropna().astype(str).str.strip().tolist()[:15]
+        sample = [v for v in sample_raw if v.lower() not in ["none", "nan", "null", "", "0", "0.0"]]
         if len(sample) < 3: continue
         
         score = 0
         if category == "name":
             for val in sample:
-                if re.search(r'\d', val): score -= 5 # Trừ nặng nếu có số
+                if re.search(r'\d', val): score -= 5
                 words = val.split()
-                if 2 <= len(words) <= 5: score += 2 # Tên người thường 2-5 chữ
-                if len(words) > 6: score -= 3 # Quá dài (Ghi chú/Địa chỉ)
+                if 2 <= len(words) <= 5: score += 2
+                if len(words) > 6: score -= 3
                 if words and words[0].lower() in COMMON_SURNAMES: score += 5
                 if val.istitle(): score += 1
                 
@@ -99,18 +100,30 @@ def resolve_column_super_sensor(df, target_col, category):
                 
         elif category == "phone":
             for val in sample:
-                d = re.sub(r'\D', '', val.split(".")[0])
-                if len(d) in [9, 10, 11] and d.startswith(("0", "84", "3", "5", "7", "8", "9")): score += 5
+                # Tách riêng các cụm số (Để trị case "0901471608 0909754524")
+                tokens = re.findall(r'\d+', val)
+                found = False
+                for t in tokens:
+                    if len(t) in [9, 10, 11] and t.startswith(("0", "84", "3", "5", "7", "8", "9")):
+                        found = True; break
+                # Dự phòng (Trị case có dấu gạch ngang "090-123-4567")
+                if not found:
+                    d_all = re.sub(r'\D', '', val.split(".")[0])
+                    if len(d_all) in [9, 10, 11] and d_all.startswith(("0", "84", "3", "5", "7", "8", "9")):
+                        found = True
+                        
+                if found: score += 5
                 else: score -= 2
                 
         elif category == "id":
             for val in sample:
-                d = re.sub(r'\s+', '', val.split(".")[0])
-                if len(d) in [9, 12] and d.isdigit(): score += 5
+                d = re.sub(r'\D', '', val.split(".")[0])
+                # Trị case 9 (CMND), 12 (CCCD) và 11 (CCCD bị rụng số 0 ở đầu)
+                if len(d) in [9, 11, 12]: score += 5
                 else: score -= 2
                 
         avg_score = score / len(sample)
-        if avg_score > best_score and avg_score > 0.5: # Phải vượt mốc tín nhiệm tối thiểu
+        if avg_score > best_score and avg_score > 0.5:
             best_score = avg_score
             best_col = c
             
@@ -121,20 +134,42 @@ def resolve_column_super_sensor(df, target_col, category):
 # ==============================================================================
 def clean_phone(phone_val):
     if pd.isna(phone_val): return ""
-    val_str = str(phone_val).strip().split(".")[0]
+    val_str = str(phone_val).strip()
     if val_str.lower() in ["0", "none", "nan", "null", ""]: return ""
-    digits = re.sub(r"\D", "", val_str)
-    if not digits: return ""
-    if digits.startswith("84") and len(digits) == 11: digits = "0" + digits[2:]
-    elif len(digits) == 9 and not digits.startswith("0"): digits = "0" + digits
-    return digits
+    
+    # Biến các ký tự rác thành khoảng trắng
+    cleaned = re.sub(r"[/,;\-–—|và+]+", " ", val_str)
+    tokens = cleaned.split()
+    
+    # 1. Quét từng cụm để bóc SĐT chuẩn xác đầu tiên
+    for tok in tokens:
+        digits = re.sub(r"\D", "", tok)
+        if digits.startswith("84") and len(digits) == 11: digits = "0" + digits[2:]
+        elif len(digits) == 9 and not digits.startswith("0"): digits = "0" + digits
+        
+        if len(digits) == 10 and digits.startswith("0"):
+            return digits # Lấy được là thoát luôn
+            
+    # 2. Back-up: Chữa cháy cho case 090 123 4567 (bị phân cách bằng dấu cách)
+    digits_all = re.sub(r"\D", "", val_str.split(".")[0])
+    if digits_all.startswith("84") and len(digits_all) == 11: digits_all = "0" + digits_all[2:]
+    elif len(digits_all) == 9 and not digits_all.startswith("0"): digits_all = "0" + digits_all
+    
+    if len(digits_all) == 10 and digits_all.startswith("0"):
+        return digits_all
+        
+    return ""
 
 def clean_id_val(raw_val):
     if pd.isna(raw_val): return ""
     val_str = str(raw_val).split(".")[0].strip()
     if val_str.lower() in ["none", "nan", "null", ""]: return ""
     val_clean = re.sub(r"\s+", "", val_str)
-    if len(val_clean) == 11 and val_clean.startswith("79"): val_clean = "0" + val_clean
+    
+    # AI tự động nhận biết CCCD bị mất số 0 và chắp vá lại
+    if len(val_clean) == 11:
+        val_clean = "0" + val_clean
+        
     return val_clean
 
 def is_valid_human_name(name):
