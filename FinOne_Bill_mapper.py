@@ -62,13 +62,13 @@ st.markdown("""
 st.markdown("""
 <div class="heno-header">
     <h1>📊 Chuyển Đổi Dữ Liệu Khách Hàng</h1>
-    <p>Công cụ AI hỗ trợ ánh xạ dữ liệu khách hàng sang chuẩn nhập liệu FinOne Bill</p>
+    <p>Công cụ hỗ trợ mapping dữ liệu khách hàng sang chuẩn nhập liệu FinOne Bill</p>
     <span class="heno-badge">FinOne Data Mapper Pro</span>
 </div>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 1. BỘ TỪ KHÓA MEGA & TỪ ĐIỂN (AI DATA BRAIN)
+# 1. BỘ TỪ KHÓA MEGA & TỪ ĐIỂN
 # ==============================================================================
 KEYWORDS = {
     "stt": ["tt", "stt", "số tt", "số thứ tự", "no.", "no", "thứ tự"],
@@ -141,7 +141,7 @@ def auto_detect_header_row_smart(raw_df):
     return best_row, max_matches
 
 # ==============================================================================
-# 3. ĐỘNG CƠ AI CẢM BIẾN DỮ LIỆU
+# 3. CẢM BIẾN DỮ LIỆU
 # ==============================================================================
 def resolve_column_super_sensor(df, target_col, category):
     cols = df.columns.tolist()
@@ -277,7 +277,7 @@ def process_sheet_data(s_name, file_bytes, config, file_name=""):
     if matches == 0 and not config["apply_fixed_header"]:
         df = load_sheet(file_bytes, sheet_name=s_name, header=None).dropna(how="all")
         df.columns = [f"Col_{i}" for i in range(len(df.columns))]
-        hdr_text = "AI Cảm Biến tự dò (Không Header)"
+        hdr_text = "Cảm Biến tự dò (Không Header)"
         header_offset = -1 # Không có tiêu đề
     else:
         use_h_idx = config["header_row_idx"] if config["apply_fixed_header"] else auto_h
@@ -375,7 +375,7 @@ if uploaded_files:
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="heno-card">', unsafe_allow_html=True)
-    st.markdown('<div class="heno-section-title">🔗 BƯỚC 1: KIỂM SOÁT TIÊU ĐỀ & GHÉP CỘT (AI HỖ TRỢ)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="heno-section-title">🔗 BƯỚC 1: KIỂM SOÁT TIÊU ĐỀ & GHÉP CỘT</div>', unsafe_allow_html=True)
 
     preview_ref_sheet = selected_sheets[0] if selected_sheets else sample_sheets[0]
     raw_preview = load_sheet(sample_file_bytes, sheet_name=preview_ref_sheet, header=None, nrows=15)
@@ -383,7 +383,7 @@ if uploaded_files:
 
     c_h1, c_h2 = st.columns([1, 2])
     with c_h1: header_choice = st.number_input("📌 Vị trí dòng tiêu đề (Header):", min_value=1, max_value=15, value=int(detected_h_row + 1))
-    with c_h2: apply_fixed_header = st.checkbox("Khóa cứng dòng tiêu đề này cho mọi file (Bỏ tích để AI tự do quét từng file)", value=False)
+    with c_h2: apply_fixed_header = st.checkbox("Khóa cứng dòng tiêu đề này cho mọi file (Bỏ tích để hệ thống tự do quét từng file)", value=False)
 
     curr_header_idx = int(header_choice) - 1
     sample_cols_df = load_sheet(sample_file_bytes, sheet_name=preview_ref_sheet, header=curr_header_idx, nrows=5)
@@ -492,7 +492,7 @@ if uploaded_files:
         st.success(f"🎉 Đã gộp thành công **{total_valid} khách hàng**!")
 
         if sheets_missing_cols:
-            st.error("🚨 **CẢNH BÁO: AI Cảm biến KHÔNG THỂ tìm thấy Tên khách hàng ở các sheet sau (Dữ liệu bị bỏ qua):**\n\n" + "\n".join(f"- {s}" for s in sheets_missing_cols))
+            st.error("🚨 **CẢNH BÁO: Hệ thống KHÔNG THỂ tìm thấy Tên khách hàng ở các sheet sau (Dữ liệu bị bỏ qua):**\n\n" + "\n".join(f"- {s}" for s in sheets_missing_cols))
 
         st.info(f"✅ **Đối soát quân số:** Tổng dòng quét = **{total_valid + total_rejected}** | Hợp lệ = **{total_valid}** | Bị loại = **{total_rejected}**")
 
