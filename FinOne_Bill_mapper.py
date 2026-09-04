@@ -87,6 +87,7 @@ ORG_KEYWORDS = ["công ty", "cty", "doanh nghiệp", "trung tâm", "ubnd", "ủy
 # 2. HÀM CORE & CACHE TỐC ĐỘ CAO
 # ==============================================================================
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def sanitize_excel_bytes(file_bytes):
     try:
         in_zip = zipfile.ZipFile(io.BytesIO(file_bytes), "r")
@@ -95,8 +96,10 @@ def sanitize_excel_bytes(file_bytes):
         for item in in_zip.infolist():
             data = in_zip.read(item.filename)
             if item.filename.startswith("xl/worksheets/sheet") and item.filename.endswith(".xml"):
-                data = re.sub(b"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>", b"", data, flags=re.DOTALL)
-                data = re.sub(b"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>", b"", data, flags=re.DOTALL)
+                # Dùng rb"..." và dọn dẹp cả dataValidations lẫn extLst
+                data = re.sub(rb"<(?:\w+:)?dataValidations[^>]*>.*?</(?:\w+:)?dataValidations>", b"", data, flags=re.DOTALL)
+                data = re.sub(rb"<(?:\w+:)?dataValidation[^>]*>.*?</(?:\w+:)?dataValidation>", b"", data, flags=re.DOTALL)
+                data = re.sub(rb"<(?:\w+:)?extLst[^>]*>.*?</(?:\w+:)?extLst>", b"", data, flags=re.DOTALL)
             out_zip.writestr(item, data)
         out_zip.close()
         out_buf.seek(0)
@@ -197,7 +200,8 @@ def resolve_column_super_sensor(df, target_col, category):
         elif category == "phone":
             for val in sample:
                 val_no_space = val.replace(" ", "")
-                if re.search(r'(?<!\d)0\d{9}(?!\d)', val_no_space): score += 5
+                # Cho phép di động (10 số), máy bàn (11 số), tổng đài (1800/1900 có 8-10 số)
+                if re.search(r'(?<!\d)(?:0\d{9,10}|1[89]00\d{4,6})(?!\d)', val_no_space): score += 5
                 else: score -= 2
                 
         elif category == "id":
@@ -219,19 +223,26 @@ def clean_phone(phone_val):
     if pd.isna(phone_val): return ""
     val_str = str(phone_val).split(".")[0].strip()
     if val_str.lower() in ["0", "none", "nan", "null", ""]: return ""
+    
     val_str = re.sub(r'(?<!\d)\+?84(?=\d{8,9})', '0', val_str)
+    
     val_no_space = val_str.replace(" ", "")
-    matches = re.findall(r'(?<!\d)0\d{9}(?!\d)', val_no_space)
+    # Bắt di động, máy bàn, tổng đài
+    matches = re.findall(r'(?<!\d)(?:0\d{9,10}|1[89]00\d{4,6})(?!\d)', val_no_space)
     if matches: return matches[0]
         
     cleaned = re.sub(r"[/,;\-–—|và]+", " ", val_str)
     tokens = cleaned.split()
     for tok in tokens:
         digits = re.sub(r"\D", "", tok)
-        if len(digits) == 10 and digits.startswith("0"): return digits
+        # Nới lỏng kiểm tra: 10 hoặc 11 số bắt đầu bằng 0, hoặc tổng đài
+        if (len(digits) in [10, 11] and digits.startswith("0")) or (digits.startswith(("1800", "1900")) and len(digits) in [8, 10]): 
+            return digits
             
     digits_all = re.sub(r"\D", "", val_str)
-    if len(digits_all) == 10 and digits_all.startswith("0"): return digits_all
+    if (len(digits_all) in [10, 11] and digits_all.startswith("0")) or (digits_all.startswith(("1800", "1900")) and len(digits_all) in [8, 10]): 
+        return digits_all
+        
     return ""
 
 def clean_id_val(raw_val):
