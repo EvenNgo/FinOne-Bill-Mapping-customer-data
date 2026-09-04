@@ -8,7 +8,7 @@ import streamlit as st
 st.set_page_config(
     page_title="FinOne Data Mapper Pro", page_icon="📊", layout="wide"
 )
-st.title("📊 Chuyển Đổi Dữ Liệu Khách Hàng - Phiên bản AI Cảm Biến")
+st.title("📊 Chuyển Đổi Dữ Liệu Khách Hàng")
 
 # ==============================================================================
 # 1. BỘ TỪ KHÓA MEGA & TỪ ĐIỂN HỌ NGƯỜI VIỆT (AI DATA BRAIN)
@@ -258,11 +258,11 @@ if uploaded_files:
     valid_cols = [str(c).strip() for c in sample_cols_df.columns if not str(c).startswith("Unnamed:") and pd.notna(c)]
     dropdown_opts = ["-- Bỏ trống --", ">> Nhập giá trị cố định <<"] + valid_cols
 
-    val_coso = st.text_input("🏢 Tên Cơ sở (Áp dụng tất cả):", placeholder="Ví dụ: Tòa nhà BMG...")
+    val_coso = st.text_input("🏢 Tên Cơ sở (Áp dụng tất cả):", placeholder="Ví dụ: Cơ sở A...")
 
     col_map1, col_map2 = st.columns(2)
     with col_map1:
-        grp_strategy = st.radio("🏢 Nhóm KH (Lớp/Khu vực):", ["Tên từng File", "Tên từng Sheet", "Nhập tên cố định", "Một cột trong bảng"], index=0)
+        grp_strategy = st.radio("🏢 Nhóm Khách hàng:", ["Tên từng File", "Tên từng Sheet", "Nhập tên cố định", "Một cột trong bảng"], index=0)
         f_group, m_group = "", None
         if grp_strategy == "Nhập tên cố định": f_group = st.text_input("✍️ Nhập Nhóm cố định:")
         elif grp_strategy == "Một cột trong bảng": 
@@ -282,7 +282,7 @@ if uploaded_files:
         m_id = st.selectbox("Cột Mã định danh:", dropdown_opts)
         f_id = st.text_input("✍️ Mã cố định:") if m_id == ">> Nhập giá trị cố định <<" else ""
         
-        st.info("🧠 **AI Super Sensor Đang Hoạt Động:** Nếu các cột bạn chọn ở trên không tồn tại ở các file khác, hệ thống sẽ tự động quét Dữ liệu (chữ, số) để tìm và ghép cột Tên & Điện thoại chính xác.")
+        st.info("🧠 **Sensor Đang Hoạt Động:** Nếu các cột bạn chọn ở trên không tồn tại ở các file khác, hệ thống sẽ tự động quét Data (chữ, số) để tìm và ghép cột Tên & Điện thoại chính xác.")
 
     config = {
         "val_coso": val_coso.strip(), "header_row_idx": curr_header_idx, "apply_fixed_header": apply_fixed_header,
